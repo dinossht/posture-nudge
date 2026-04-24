@@ -2,23 +2,26 @@
 """Posture nudge — webcam-based posture monitoring using MediaPipe Pose.
 
 Subcommands:
-  calibrate       — capture your good-posture baseline
-  record          — capture labeled samples for each of a set of postures
-  analyze         — summarize samples and write per-metric thresholds
-  visualize       — live overlay of landmarks + metrics (no alerts)
-  monitor         — run as a daemon, send desktop alerts when you slouch
-  stats           — summarize recent nudges from the nudge log
-  install-service — write a systemd user unit so monitor runs on login
+  calibrate        — capture your good-posture baseline (do this once)
+  snap-baseline    — quick re-baseline (for chair/screen changes)
+  record           — capture labeled samples for each of a set of postures
+  analyze          — summarize samples and write per-metric thresholds
+  visualize        — live overlay of landmarks + metrics (no alerts)
+  monitor          — periodic posture check, send desktop alerts when you slouch
+  stats            — summarize recent nudges from the nudge log
+  digest           — one-shot stats summary as a desktop notification
+  install-service  — systemd user unit so monitor runs on login
+  install-digest   — systemd user timer that runs `digest` weekly
+  install-shortcut — GNOME keyboard shortcut that invokes snap-baseline
 """
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
 from collections import defaultdict
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
