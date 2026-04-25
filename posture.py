@@ -811,12 +811,19 @@ def cmd_plot(args):
         spine.set_color(FG)
     ax1.tick_params(colors=FG, length=0, labelsize=8)
 
-    # Per-day bars (bad % per day)
-    bar_colors = [
-        cmap(f) if not np.isnan(f) and day_totals[i] >= 3 else MUTED
-        for i, f in enumerate(day_fracs)
-    ]
-    bar_heights = [(f * 100) if not np.isnan(f) else 0 for f in day_fracs]
+    # Per-day bars (bad % per day). Need at least ~1 hour of checks (6 at 10-min
+    # interval) to be meaningful — below that the bar is hidden entirely so the
+    # day reads as "no data" rather than misleadingly "100% bad on 2 samples".
+    MIN_SAMPLES = 6
+    bar_colors = []
+    bar_heights = []
+    for i, f in enumerate(day_fracs):
+        if np.isnan(f) or day_totals[i] < MIN_SAMPLES:
+            bar_colors.append(MUTED)
+            bar_heights.append(0)
+        else:
+            bar_colors.append(cmap(f))
+            bar_heights.append(f * 100)
     ax2.bar(range(days_back), bar_heights, color=bar_colors, width=0.85)
     ax2.set_facecolor(BG)
     ax2.set_title("Bad % per day", color=FG, fontsize=10, loc="left", pad=6)
