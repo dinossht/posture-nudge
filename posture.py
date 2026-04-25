@@ -730,8 +730,11 @@ def cmd_digest(args):
 def cmd_plot(args):
     """Render a posture-quality plot to PNG.
 
-    Top:    7-day × 24-hour heatmap of bad-fraction (green→yellow→red, grey if no data).
-    Bottom: Daily nudge counts for the last 14 days.
+    Top:    7-day × 24-hour heatmap of bad-posture fraction (green=good,
+            yellow=mixed, red=bad). Cells with no good/bad samples yet are
+            shown as muted grey ("no data this hour").
+    Bottom: Per-day bar chart of bad-posture % across the same 7 days.
+            Days with too few samples (<3 checks) shaded grey.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -745,15 +748,12 @@ def cmd_plot(args):
     GREEN = "#a3be8c"
     YELLOW = "#ebcb8b"
     RED = "#bf616a"
-    BLUE = "#88c0d0"
 
-    now = datetime.now()
-    today = now.date()
+    today = datetime.now().date()
     days_back = 7
     day_list = [today - timedelta(days=i) for i in range(days_back - 1, -1, -1)]
 
-    # Bucket check_log into [day_idx][hour] -> {good, bad, absent}
-    counts = [[{"good": 0, "bad": 0, "absent": 0} for _ in range(24)] for _ in range(days_back)]
+    counts = [[{"good": 0, "bad": 0} for _ in range(24)] for _ in range(days_back)]
     if CHECK_LOG.exists():
         for line in CHECK_LOG.read_text().splitlines():
             if not line.strip():
@@ -762,85 +762,80 @@ def cmd_plot(args):
                 e = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            ts = datetime.fromtimestamp(e["ts"])
-            d = ts.date()
-            if d not in day_list:
-                continue
-            di = day_list.index(d)
-            hi = ts.hour
             s = e.get("status", "")
-            if s in ("good", "bad", "absent"):
-                counts[di][hi][s] += 1
+            if s not in ("good", "bad"):
+                continue
+            ts = datetime.fromtimestamp(e["ts"])
+            if ts.date() not in day_list:
+                continue
+            counts[day_list.index(ts.date())][ts.hour][s] += 1
 
-    # Bad fraction matrix: NaN when no good+bad data this hour
     matrix = np.full((days_back, 24), np.nan)
     for di in range(days_back):
         for hi in range(24):
             c = counts[di][hi]
             denom = c["good"] + c["bad"]
-            if denom > 0:
+            if denom >= 1:
                 matrix[di, hi] = c["bad"] / denom
 
-    # Bottom: daily nudge counts for last 14 days
-    days_14 = [today - timedelta(days=i) for i in range(13, -1, -1)]
-    by_day = {d: 0 for d in days_14}
-    if NUDGE_LOG.exists():
-        for line in NUDGE_LOG.read_text().splitlines():
-            if not line.strip():
-                continue
-            try:
-                e = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            d = datetime.fromtimestamp(e["ts"]).date()
-            if d in by_day:
-                by_day[d] += 1
-    daily_counts = [by_day[d] for d in days_14]
+    day_fracs = []
+    day_totals = []
+    for di in range(days_back):
+        good = sum(counts[di][h]["good"] for h in range(24))
+        bad = sum(counts[di][h]["bad"] for h in range(24))
+        day_totals.append(good + bad)
+        day_fracs.append(bad / (good + bad) if (good + bad) > 0 else float("nan"))
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 4.4), facecolor=BG,
-                                   gridspec_kw={"height_ratios": [3, 2]})
-    plt.subplots_adjust(left=0.12, right=0.97, top=0.92, bottom=0.13, hspace=0.85)
+    # Render at the size we want it to APPEAR in conky. Conky on hi-DPI X11
+    # upscales the PNG by ~2×, so a 300×220 PNG ends up as ~600×440 on screen.
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(3, 2.2), facecolor=BG,
+                                   gridspec_kw={"height_ratios": [4, 2]}, dpi=100)
+    plt.subplots_adjust(left=0.18, right=0.94, top=0.90, bottom=0.18, hspace=1.0)
 
-    # Heatmap
     cmap = LinearSegmentedColormap.from_list("posture", [GREEN, YELLOW, RED])
     cmap.set_bad(MUTED)
+
+    # Heatmap
     im = ax1.imshow(np.ma.masked_invalid(matrix), aspect="auto", cmap=cmap,
                     vmin=0, vmax=1, interpolation="nearest")
     ax1.set_facecolor(MUTED)
-    ax1.set_title("Bad-posture fraction by hour  (last 7 days)",
+    ax1.set_title("Bad-posture % by hour (last 7d)",
                   color=FG, fontsize=10, loc="left", pad=6)
-    ax1.set_xticks(range(0, 24, 3))
-    ax1.set_xticklabels([f"{h:02d}" for h in range(0, 24, 3)], color=FG, fontsize=8)
+    ax1.set_xticks(range(0, 24, 4))
+    ax1.set_xticklabels([f"{h:02d}" for h in range(0, 24, 4)],
+                        color=FG, fontsize=8)
     ax1.set_yticks(range(days_back))
-    ax1.set_yticklabels([d.strftime("%a %d") for d in day_list], color=FG, fontsize=8)
+    ax1.set_yticklabels([d.strftime("%a") for d in day_list],
+                        color=FG, fontsize=8)
     for spine in ax1.spines.values():
         spine.set_color(FG)
-    ax1.tick_params(colors=FG, length=0)
-    cbar = fig.colorbar(im, ax=ax1, orientation="vertical", pad=0.02, aspect=12)
-    cbar.set_ticks([0, 0.5, 1])
-    cbar.set_ticklabels(["good", "50%", "bad"])
-    cbar.ax.tick_params(colors=FG, labelsize=8)
-    cbar.outline.set_edgecolor(FG)
+    ax1.tick_params(colors=FG, length=0, labelsize=8)
 
-    # Daily bars
-    ax2.bar(range(14), daily_counts, color=BLUE, width=0.85)
+    # Per-day bars (bad % per day)
+    bar_colors = [
+        cmap(f) if not np.isnan(f) and day_totals[i] >= 3 else MUTED
+        for i, f in enumerate(day_fracs)
+    ]
+    bar_heights = [(f * 100) if not np.isnan(f) else 0 for f in day_fracs]
+    ax2.bar(range(days_back), bar_heights, color=bar_colors, width=0.85)
     ax2.set_facecolor(BG)
-    ax2.set_title("Nudges per day (last 14 days)", color=FG, fontsize=10,
-                  loc="left", pad=6)
-    ax2.set_xticks(range(14))
-    ax2.set_xticklabels([d.strftime("%d") for d in days_14], color=FG, fontsize=8)
-    ax2.tick_params(colors=FG, labelsize=8)
+    ax2.set_title("Bad % per day", color=FG, fontsize=10, loc="left", pad=6)
+    ax2.set_xticks(range(days_back))
+    ax2.set_xticklabels([d.strftime("%a") for d in day_list],
+                        color=FG, fontsize=8)
+    ax2.set_ylim(0, 100)
+    ax2.set_yticks([0, 50, 100])
+    ax2.set_yticklabels(["0", "50", "100"], color=FG, fontsize=8)
     for spine in ax2.spines.values():
         spine.set_color(FG)
+    ax2.tick_params(colors=FG, length=0, labelsize=8)
     ax2.grid(True, axis="y", alpha=0.18, color=FG)
     ax2.set_axisbelow(True)
-    if max(daily_counts) > 0:
-        ax2.set_ylim(0, max(daily_counts) * 1.15 + 0.5)
 
     fig.savefig(args.output, dpi=100, facecolor=BG)
     plt.close(fig)
-    print(f"wrote {args.output}")
-
+    total = sum(day_totals)
+    print(f"wrote {args.output} ({total} good/bad samples across {days_back} days)")
 
 SYSTEMD_UNIT = """[Unit]
 Description=Posture nudge — webcam posture monitor
