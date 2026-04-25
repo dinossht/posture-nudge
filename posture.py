@@ -34,6 +34,8 @@ BASELINE_PATH = CONFIG_DIR / "baseline.json"
 SAMPLES_PATH = CONFIG_DIR / "samples.jsonl"
 THRESHOLDS_PATH = CONFIG_DIR / "thresholds.json"
 NUDGE_LOG = CONFIG_DIR / "nudge_log.jsonl"
+CHECK_LOG = CONFIG_DIR / "check_log.jsonl"  # one line per monitor check
+PLOT_PATH = CONFIG_DIR / "plot.png"
 
 POSTURE_SEQUENCE: list[tuple[str, str]] = [
     ("good_normal",  "Sit upright at your normal laptop distance."),
@@ -521,6 +523,21 @@ def log_nudge(reasons: list[str], bad_for_seconds: float):
         }) + "\n")
 
 
+def log_check(status: str, metrics: Metrics | None = None):
+    """Append one check outcome. Status ∈ {good, bad, absent, camera_busy, quiet}.
+
+    Used to build hour-of-day / day-of-week posture heatmaps.
+    """
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    entry = {"ts": time.time(), "status": status}
+    if metrics is not None:
+        entry["ear_drop"] = round(metrics.ear_drop, 3)
+        entry["shoulder_width"] = round(metrics.shoulder_width, 3)
+        entry["shoulder_tilt"] = round(metrics.shoulder_tilt, 3)
+    with CHECK_LOG.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 def in_quiet_hours(now: datetime, start: int, end: int) -> bool:
     """True if `now.hour` is inside the quiet window. Handles wrap past midnight."""
     h = now.hour
@@ -586,6 +603,7 @@ def cmd_monitor(args):
             now_dt = datetime.now()
             stamp = now_dt.strftime("%H:%M:%S")
             if in_quiet_hours(now_dt, args.quiet_start, args.quiet_end):
+                log_check("quiet")
                 time.sleep(args.interval)
                 continue
             # Hot-reload baseline if snap-baseline updated the file.
@@ -600,6 +618,7 @@ def cmd_monitor(args):
             cap = open_camera(args.camera)
             if cap is None:
                 print(f"[{stamp}] camera busy (video call?), skipping this check")
+                log_check("camera_busy")
                 # Don't let streak tick while the camera is unavailable.
                 time.sleep(args.interval)
                 continue
@@ -609,9 +628,11 @@ def cmd_monitor(args):
 
             if m is None:
                 print(f"[{stamp}] no person detected — skipping (resetting streak)")
+                log_check("absent")
                 consecutive_bad = 0
             else:
                 bad, reasons = is_bad_posture(m, baseline, th)
+                log_check("bad" if bad else "good", m)
                 if bad:
                     consecutive_bad += 1
                     now = time.time()
@@ -706,6 +727,121 @@ def cmd_digest(args):
     print(body)
 
 
+def cmd_plot(args):
+    """Render a posture-quality plot to PNG.
+
+    Top:    7-day × 24-hour heatmap of bad-fraction (green→yellow→red, grey if no data).
+    Bottom: Daily nudge counts for the last 14 days.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from datetime import timedelta
+
+    BG = "#0a0a0a"
+    FG = "#eceff4"
+    MUTED = "#4c566a"
+    GREEN = "#a3be8c"
+    YELLOW = "#ebcb8b"
+    RED = "#bf616a"
+    BLUE = "#88c0d0"
+
+    now = datetime.now()
+    today = now.date()
+    days_back = 7
+    day_list = [today - timedelta(days=i) for i in range(days_back - 1, -1, -1)]
+
+    # Bucket check_log into [day_idx][hour] -> {good, bad, absent}
+    counts = [[{"good": 0, "bad": 0, "absent": 0} for _ in range(24)] for _ in range(days_back)]
+    if CHECK_LOG.exists():
+        for line in CHECK_LOG.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            ts = datetime.fromtimestamp(e["ts"])
+            d = ts.date()
+            if d not in day_list:
+                continue
+            di = day_list.index(d)
+            hi = ts.hour
+            s = e.get("status", "")
+            if s in ("good", "bad", "absent"):
+                counts[di][hi][s] += 1
+
+    # Bad fraction matrix: NaN when no good+bad data this hour
+    matrix = np.full((days_back, 24), np.nan)
+    for di in range(days_back):
+        for hi in range(24):
+            c = counts[di][hi]
+            denom = c["good"] + c["bad"]
+            if denom > 0:
+                matrix[di, hi] = c["bad"] / denom
+
+    # Bottom: daily nudge counts for last 14 days
+    days_14 = [today - timedelta(days=i) for i in range(13, -1, -1)]
+    by_day = {d: 0 for d in days_14}
+    if NUDGE_LOG.exists():
+        for line in NUDGE_LOG.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            d = datetime.fromtimestamp(e["ts"]).date()
+            if d in by_day:
+                by_day[d] += 1
+    daily_counts = [by_day[d] for d in days_14]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 4.4), facecolor=BG,
+                                   gridspec_kw={"height_ratios": [3, 2]})
+    plt.subplots_adjust(left=0.12, right=0.97, top=0.92, bottom=0.13, hspace=0.85)
+
+    # Heatmap
+    cmap = LinearSegmentedColormap.from_list("posture", [GREEN, YELLOW, RED])
+    cmap.set_bad(MUTED)
+    im = ax1.imshow(np.ma.masked_invalid(matrix), aspect="auto", cmap=cmap,
+                    vmin=0, vmax=1, interpolation="nearest")
+    ax1.set_facecolor(MUTED)
+    ax1.set_title("Bad-posture fraction by hour  (last 7 days)",
+                  color=FG, fontsize=10, loc="left", pad=6)
+    ax1.set_xticks(range(0, 24, 3))
+    ax1.set_xticklabels([f"{h:02d}" for h in range(0, 24, 3)], color=FG, fontsize=8)
+    ax1.set_yticks(range(days_back))
+    ax1.set_yticklabels([d.strftime("%a %d") for d in day_list], color=FG, fontsize=8)
+    for spine in ax1.spines.values():
+        spine.set_color(FG)
+    ax1.tick_params(colors=FG, length=0)
+    cbar = fig.colorbar(im, ax=ax1, orientation="vertical", pad=0.02, aspect=12)
+    cbar.set_ticks([0, 0.5, 1])
+    cbar.set_ticklabels(["good", "50%", "bad"])
+    cbar.ax.tick_params(colors=FG, labelsize=8)
+    cbar.outline.set_edgecolor(FG)
+
+    # Daily bars
+    ax2.bar(range(14), daily_counts, color=BLUE, width=0.85)
+    ax2.set_facecolor(BG)
+    ax2.set_title("Nudges per day (last 14 days)", color=FG, fontsize=10,
+                  loc="left", pad=6)
+    ax2.set_xticks(range(14))
+    ax2.set_xticklabels([d.strftime("%d") for d in days_14], color=FG, fontsize=8)
+    ax2.tick_params(colors=FG, labelsize=8)
+    for spine in ax2.spines.values():
+        spine.set_color(FG)
+    ax2.grid(True, axis="y", alpha=0.18, color=FG)
+    ax2.set_axisbelow(True)
+    if max(daily_counts) > 0:
+        ax2.set_ylim(0, max(daily_counts) * 1.15 + 0.5)
+
+    fig.savefig(args.output, dpi=100, facecolor=BG)
+    plt.close(fig)
+    print(f"wrote {args.output}")
+
+
 SYSTEMD_UNIT = """[Unit]
 Description=Posture nudge — webcam posture monitor
 After=graphical-session.target
@@ -765,6 +901,47 @@ Unit=posture-nudge-digest.service
 [Install]
 WantedBy=timers.target
 """
+
+
+PLOT_SERVICE = """[Unit]
+Description=Posture nudge — regenerate plot.png
+
+[Service]
+Type=oneshot
+ExecStart={python} {script} plot
+"""
+
+PLOT_TIMER = """[Unit]
+Description=Regenerate posture-nudge plot every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=posture-nudge-plot.service
+
+[Install]
+WantedBy=timers.target
+"""
+
+
+def cmd_install_plot_timer(args):
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    python_bin = Path(sys.executable)
+    script_path = Path(__file__).resolve()
+
+    svc_path = unit_dir / "posture-nudge-plot.service"
+    tim_path = unit_dir / "posture-nudge-plot.timer"
+    svc_path.write_text(PLOT_SERVICE.format(python=python_bin, script=script_path))
+    tim_path.write_text(PLOT_TIMER)
+
+    print(f"Wrote {svc_path}")
+    print(f"Wrote {tim_path}\n")
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", "--now",
+                    "posture-nudge-plot.timer"], check=True)
+    print("Plot is regenerated every 5 minutes from now on.")
+    print("Disable: systemctl --user disable --now posture-nudge-plot.timer")
 
 
 def cmd_install_digest(args):
@@ -855,6 +1032,15 @@ def main():
     pid = sub.add_parser("install-digest",
                          help="Install a systemd user timer that runs `digest` weekly")
     pid.set_defaults(func=cmd_install_digest)
+
+    pp = sub.add_parser("plot",
+                        help="Render a posture-quality PNG (heatmap + daily bars)")
+    pp.add_argument("--output", type=str, default=str(PLOT_PATH))
+    pp.set_defaults(func=cmd_plot)
+
+    ppt = sub.add_parser("install-plot-timer",
+                         help="systemd user timer that regenerates plot.png every 5min")
+    ppt.set_defaults(func=cmd_install_plot_timer)
 
     psb = sub.add_parser("snap-baseline",
                          help="Quick re-calibrate the baseline (for chair/screen changes)")
