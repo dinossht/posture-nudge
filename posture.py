@@ -68,10 +68,23 @@ class Metrics:
 
 @dataclass
 class Thresholds:
-    """Per-metric threshold deltas above baseline. Used in `is_bad_posture`."""
+    """Per-metric threshold deltas above baseline. `slack` 0..100 multiplies all
+    three by (1 + slack * 0.19) at use site — base values are never overwritten,
+    so dragging the slack slider in the GUI never compounds across runs."""
     ear_drop: float = 0.20
     shoulder_width: float = 0.15  # relative (15% wider than baseline)
     shoulder_tilt: float = 0.08
+    slack: int = 0
+
+    def applied(self) -> "Thresholds":
+        """Return new Thresholds with slack baked into the metric values."""
+        mult = 1.0 + self.slack * 0.19
+        return Thresholds(
+            ear_drop=self.ear_drop * mult,
+            shoulder_width=self.shoulder_width * mult,
+            shoulder_tilt=self.shoulder_tilt * mult,
+            slack=0,
+        )
 
 
 def compute_metrics(lm) -> Metrics | None:
@@ -108,13 +121,14 @@ def compute_deltas(m: Metrics, base: Metrics) -> dict[str, float]:
 
 
 def is_bad_posture(m: Metrics, base: Metrics, th: Thresholds) -> tuple[bool, list[str]]:
+    eff = th.applied()
     d = compute_deltas(m, base)
     reasons = []
-    if d["ear_drop"] > th.ear_drop:
+    if d["ear_drop"] > eff.ear_drop:
         reasons.append(f"head forward (+{d['ear_drop']:.2f})")
-    if d["shoulder_width"] > th.shoulder_width:
+    if d["shoulder_width"] > eff.shoulder_width:
         reasons.append(f"leaning in (+{d['shoulder_width']*100:.0f}%)")
-    if d["shoulder_tilt"] > th.shoulder_tilt:
+    if d["shoulder_tilt"] > eff.shoulder_tilt:
         reasons.append(f"shoulders uneven (+{d['shoulder_tilt']:.2f})")
     return (len(reasons) > 0, reasons)
 
@@ -162,7 +176,10 @@ def load_baseline() -> Metrics:
 def load_thresholds() -> Thresholds:
     if THRESHOLDS_PATH.exists():
         data = json.loads(THRESHOLDS_PATH.read_text())
-        return Thresholds(**{k: data[k] for k in METRIC_NAMES if k in data})
+        kwargs = {k: data[k] for k in METRIC_NAMES if k in data}
+        if "slack" in data:
+            kwargs["slack"] = int(data["slack"])
+        return Thresholds(**kwargs)
     return Thresholds()
 
 
@@ -354,29 +371,31 @@ def cmd_snap_baseline(args):
 
         # Phase 2: live test with one "slack" slider (skip in --no-gui)
         if not args.no_gui and args.test_seconds > 0:
-            saved_th = Thresholds(
+            base_th = Thresholds(
                 ear_drop=th.ear_drop, shoulder_width=th.shoulder_width,
-                shoulder_tilt=th.shoulder_tilt,
+                shoulder_tilt=th.shoulder_tilt, slack=0,
             )
-            # One slider, 0..100. Multiplier scales 1x..20x of the saved values
-            # (linear), so at 100 every threshold is well above any real slouch
-            # and effectively reads "good posture" all the time.
-            cv2.createTrackbar("slack", win_title, 0, 100, lambda v: None)
+            # Slider starts at the previously-saved slack so the user sees their
+            # current setting. 0..100; 0 = strict (calibrated), 100 = ~20x more
+            # lenient (effectively always-good).
+            cv2.createTrackbar("slack", win_title, th.slack, 100, lambda v: None)
 
             test_end = time.time() + args.test_seconds
             saved_flash_until = 0.0
-            live_th = saved_th
+            live_th = Thresholds(
+                ear_drop=base_th.ear_drop, shoulder_width=base_th.shoulder_width,
+                shoulder_tilt=base_th.shoulder_tilt, slack=th.slack,
+            )
             while time.time() < test_end:
                 ok, frame = cap.read()
                 if not ok:
                     continue
                 slack = cv2.getTrackbarPos("slack", win_title)
-                mult = 1.0 + slack * 0.19  # 0 -> 1x, 100 -> 20x
                 live_th = Thresholds(
-                    ear_drop=saved_th.ear_drop * mult,
-                    shoulder_width=saved_th.shoulder_width * mult,
-                    shoulder_tilt=saved_th.shoulder_tilt * mult,
+                    ear_drop=base_th.ear_drop, shoulder_width=base_th.shoulder_width,
+                    shoulder_tilt=base_th.shoulder_tilt, slack=slack,
                 )
+                mult = 1.0 + slack * 0.19
                 result = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 m = compute_metrics(result.pose_landmarks.landmark) if result.pose_landmarks else None
                 draw_overlay(frame, result.pose_landmarks, m, baseline, live_th)
@@ -398,10 +417,11 @@ def cmd_snap_baseline(args):
                 if key == 27:
                     break
 
-            # Auto-save the final slack value on close.
+            # Auto-save the final slack value on close. Keep base values intact
+            # so slack never compounds across runs.
             save_thresholds(live_th)
             notify("posture-nudge",
-                   f"Thresholds saved (slack {slack}/100, {mult:.1f}x)")
+                   f"Slack saved: {slack}/100 ({mult:.1f}x)")
     finally:
         cap.release()
         cv2.destroyAllWindows()
