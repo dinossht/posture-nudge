@@ -302,6 +302,7 @@ def cmd_snap_baseline(args):
     win_title = "posture-nudge: snap baseline (ESC to cancel)"
 
     try:
+        # Phase 1: calibration capture
         while time.time() < end:
             ok, frame = cap.read()
             if not ok:
@@ -327,6 +328,45 @@ def cmd_snap_baseline(args):
                 if cv2.waitKey(1) & 0xFF == 27:
                     aborted = True
                     break
+
+        if aborted:
+            return
+
+        if len(samples) < 5:
+            return  # handled outside finally for proper notification
+
+        # Save baseline now so the test phase uses the just-captured values.
+        baseline = Metrics(
+            ear_drop=float(np.median([s.ear_drop for s in samples])),
+            shoulder_width=float(np.median([s.shoulder_width for s in samples])),
+            shoulder_tilt=float(np.median([s.shoulder_tilt for s in samples])),
+            confidence=float(np.mean([s.confidence for s in samples])),
+        )
+        BASELINE_PATH.write_text(json.dumps(asdict(baseline), indent=2))
+        notify("posture-nudge",
+               f"Baseline updated ({len(samples)} samples, conf {baseline.confidence:.0%})")
+        print(f"Saved baseline to {BASELINE_PATH}")
+        print(json.dumps(asdict(baseline), indent=2))
+
+        # Phase 2: live test (skip in --no-gui since there's nothing to see)
+        if not args.no_gui and args.test_seconds > 0:
+            test_end = time.time() + args.test_seconds
+            test_title = "posture-nudge: try different postures (ESC to close)"
+            while time.time() < test_end:
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+                result = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                m = compute_metrics(result.pose_landmarks.landmark) if result.pose_landmarks else None
+                draw_overlay(frame, result.pose_landmarks, m, baseline, th)
+                remaining = max(0, test_end - time.time())
+                cv2.putText(frame, f"Try slouching / leaning — {remaining:.1f}s",
+                            (20, frame.shape[0] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+                cv2.imshow(test_title, frame)
+                cv2.setWindowProperty(test_title, cv2.WND_PROP_TOPMOST, 1)
+                if cv2.waitKey(1) & 0xFF == 27:
+                    break
     finally:
         cap.release()
         cv2.destroyAllWindows()
@@ -341,18 +381,6 @@ def cmd_snap_baseline(args):
                f"Snap failed — only {len(samples)} valid samples. Make sure your "
                f"shoulders + ears are in view and try again.")
         sys.exit(1)
-
-    baseline = Metrics(
-        ear_drop=float(np.median([s.ear_drop for s in samples])),
-        shoulder_width=float(np.median([s.shoulder_width for s in samples])),
-        shoulder_tilt=float(np.median([s.shoulder_tilt for s in samples])),
-        confidence=float(np.mean([s.confidence for s in samples])),
-    )
-    BASELINE_PATH.write_text(json.dumps(asdict(baseline), indent=2))
-    notify("posture-nudge",
-           f"Baseline updated ({len(samples)} samples, conf {baseline.confidence:.0%})")
-    print(f"Saved baseline to {BASELINE_PATH}")
-    print(json.dumps(asdict(baseline), indent=2))
 
 
 def cmd_install_shortcut(args):
@@ -1122,6 +1150,9 @@ def main():
                          help="Quick re-calibrate the baseline (for chair/screen changes)")
     psb.add_argument("--camera", type=int, default=0)
     psb.add_argument("--duration", type=float, default=5.0)
+    psb.add_argument("--test-seconds", type=float, default=5.0,
+                     help="After saving, run a live test phase so you can verify "
+                          "the new baseline by slouching/leaning. 0 to skip.")
     psb.add_argument("--no-gui", action="store_true",
                      help="Skip the live preview window (headless mode)")
     psb.set_defaults(func=cmd_snap_baseline)
