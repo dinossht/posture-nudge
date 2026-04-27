@@ -50,6 +50,8 @@ POSTURE_SEQUENCE: list[tuple[str, str]] = [
 
 # MediaPipe pose landmark indices
 NOSE = 0
+L_EYE_INNER, L_EYE, L_EYE_OUTER = 1, 2, 3
+R_EYE_INNER, R_EYE, R_EYE_OUTER = 4, 5, 6
 L_EAR, R_EAR = 7, 8
 L_SHOULDER, R_SHOULDER = 11, 12
 
@@ -73,9 +75,11 @@ class Thresholds:
 
 
 def compute_metrics(lm) -> Metrics | None:
-    required = [L_EAR, R_EAR, L_SHOULDER, R_SHOULDER]
+    # Require shoulders + ears AND face landmarks (nose + at least one eye) so
+    # we don't measure when the user is looking away, head out of frame, etc.
+    required = [L_EAR, R_EAR, L_SHOULDER, R_SHOULDER, NOSE, L_EYE, R_EYE]
     confidence = min(lm[i].visibility for i in required)
-    if confidence < 0.5:
+    if confidence < 0.6:
         return None
 
     ls, rs = lm[L_SHOULDER], lm[R_SHOULDER]
@@ -354,9 +358,10 @@ def cmd_snap_baseline(args):
                 ear_drop=th.ear_drop, shoulder_width=th.shoulder_width,
                 shoulder_tilt=th.shoulder_tilt,
             )
-            # Single slider, 0..100. Scales each saved threshold by (1 + slider/100).
-            # 0 = current saved values, 100 = 2x more lenient.
-            cv2.createTrackbar("slack %", win_title, 0, 100, lambda v: None)
+            # One slider, 0..100. Multiplier scales 1x..20x of the saved values
+            # (linear), so at 100 every threshold is well above any real slouch
+            # and effectively reads "good posture" all the time.
+            cv2.createTrackbar("slack", win_title, 0, 100, lambda v: None)
 
             test_end = time.time() + args.test_seconds
             saved_flash_until = 0.0
@@ -364,8 +369,8 @@ def cmd_snap_baseline(args):
                 ok, frame = cap.read()
                 if not ok:
                     continue
-                slack = cv2.getTrackbarPos("slack %", win_title) / 100.0
-                mult = 1.0 + slack
+                slack = cv2.getTrackbarPos("slack", win_title)
+                mult = 1.0 + slack * 0.19  # 0 -> 1x, 100 -> 20x
                 live_th = Thresholds(
                     ear_drop=saved_th.ear_drop * mult,
                     shoulder_width=saved_th.shoulder_width * mult,
@@ -379,7 +384,7 @@ def cmd_snap_baseline(args):
                 cv2.putText(frame, f"Slouch / lean to test — {remaining:.1f}s",
                             (20, frame.shape[0] - 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                hint = f"Slack +{slack*100:.0f}%  •  S = save  •  ESC = quit"
+                hint = f"Slack {slack}/100 ({mult:.1f}x)  •  S = save  •  ESC = quit"
                 cv2.putText(frame, hint, (20, frame.shape[0] - 20),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
                 if time.time() < saved_flash_until:
@@ -396,7 +401,7 @@ def cmd_snap_baseline(args):
                     saved_flash_until = time.time() + 1.5
                     test_end = max(test_end, time.time() + 5.0)
                     notify("posture-nudge",
-                           f"Thresholds saved (+{slack*100:.0f}% slack)")
+                           f"Thresholds saved (slack {slack}/100, {mult:.1f}x)")
     finally:
         cap.release()
         cv2.destroyAllWindows()
