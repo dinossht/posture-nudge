@@ -299,7 +299,7 @@ def cmd_snap_baseline(args):
     samples: list[Metrics] = []
     end = time.time() + args.duration
     aborted = False
-    win_title = "posture-nudge: snap baseline (ESC to cancel)"
+    win_title = "posture-nudge"
 
     try:
         # Phase 1: calibration capture
@@ -348,18 +348,15 @@ def cmd_snap_baseline(args):
         print(f"Saved baseline to {BASELINE_PATH}")
         print(json.dumps(asdict(baseline), indent=2))
 
-        # Phase 2: live test with tunable thresholds (skip in --no-gui)
+        # Phase 2: live test with one "slack" slider (skip in --no-gui)
         if not args.no_gui and args.test_seconds > 0:
-            test_title = "posture-nudge: tune (drag sliders, S=save, ESC=quit)"
-            cv2.namedWindow(test_title)
-            # Trackbars in 0..50 units; threshold = value/100. Stretches default
-            # range to ±0.50 which covers any reasonable tolerance.
-            cv2.createTrackbar("ear   x100", test_title,
-                               int(round(th.ear_drop * 100)), 50, lambda v: None)
-            cv2.createTrackbar("width x100", test_title,
-                               int(round(th.shoulder_width * 100)), 50, lambda v: None)
-            cv2.createTrackbar("tilt  x100", test_title,
-                               int(round(th.shoulder_tilt * 100)), 50, lambda v: None)
+            saved_th = Thresholds(
+                ear_drop=th.ear_drop, shoulder_width=th.shoulder_width,
+                shoulder_tilt=th.shoulder_tilt,
+            )
+            # Single slider, 0..100. Scales each saved threshold by (1 + slider/100).
+            # 0 = current saved values, 100 = 2x more lenient.
+            cv2.createTrackbar("slack %", win_title, 0, 100, lambda v: None)
 
             test_end = time.time() + args.test_seconds
             saved_flash_until = 0.0
@@ -367,11 +364,12 @@ def cmd_snap_baseline(args):
                 ok, frame = cap.read()
                 if not ok:
                     continue
-                # Live thresholds straight from the sliders.
+                slack = cv2.getTrackbarPos("slack %", win_title) / 100.0
+                mult = 1.0 + slack
                 live_th = Thresholds(
-                    ear_drop=cv2.getTrackbarPos("ear   x100", test_title) / 100.0,
-                    shoulder_width=cv2.getTrackbarPos("width x100", test_title) / 100.0,
-                    shoulder_tilt=cv2.getTrackbarPos("tilt  x100", test_title) / 100.0,
+                    ear_drop=saved_th.ear_drop * mult,
+                    shoulder_width=saved_th.shoulder_width * mult,
+                    shoulder_tilt=saved_th.shoulder_tilt * mult,
                 )
                 result = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 m = compute_metrics(result.pose_landmarks.landmark) if result.pose_landmarks else None
@@ -381,26 +379,24 @@ def cmd_snap_baseline(args):
                 cv2.putText(frame, f"Slouch / lean to test — {remaining:.1f}s",
                             (20, frame.shape[0] - 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-                hint = "Drag sliders to relax constraints  •  S = save  •  ESC = quit"
+                hint = f"Slack +{slack*100:.0f}%  •  S = save  •  ESC = quit"
                 cv2.putText(frame, hint, (20, frame.shape[0] - 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
                 if time.time() < saved_flash_until:
                     cv2.putText(frame, "SAVED", (frame.shape[1] - 130, 40),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
 
-                cv2.imshow(test_title, frame)
-                cv2.setWindowProperty(test_title, cv2.WND_PROP_TOPMOST, 1)
+                cv2.imshow(win_title, frame)
+                cv2.setWindowProperty(win_title, cv2.WND_PROP_TOPMOST, 1)
                 key = cv2.waitKey(1) & 0xFF
                 if key == 27:
                     break
                 if key in (ord("s"), ord("S")):
                     save_thresholds(live_th)
                     saved_flash_until = time.time() + 1.5
-                    test_end = max(test_end, time.time() + 5.0)  # buy more time
+                    test_end = max(test_end, time.time() + 5.0)
                     notify("posture-nudge",
-                           f"Thresholds saved (ear={live_th.ear_drop:.2f} "
-                           f"width={live_th.shoulder_width:.2f} "
-                           f"tilt={live_th.shoulder_tilt:.2f})")
+                           f"Thresholds saved (+{slack*100:.0f}% slack)")
     finally:
         cap.release()
         cv2.destroyAllWindows()
