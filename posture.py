@@ -115,6 +115,18 @@ def is_bad_posture(m: Metrics, base: Metrics, th: Thresholds) -> tuple[bool, lis
     return (len(reasons) > 0, reasons)
 
 
+LID_STATE_PATH = Path("/proc/acpi/button/lid/LID0/state")
+
+
+def lid_state() -> str:
+    """Return 'open', 'closed', or 'unknown' (sysfs file missing on some hw)."""
+    try:
+        text = LID_STATE_PATH.read_text()
+        return "closed" if "closed" in text else ("open" if "open" in text else "unknown")
+    except FileNotFoundError:
+        return "unknown"
+
+
 def open_camera(index: int) -> cv2.VideoCapture | None:
     """Open camera; returns None if unavailable (so callers can retry)."""
     cap = cv2.VideoCapture(index)
@@ -122,6 +134,19 @@ def open_camera(index: int) -> cv2.VideoCapture | None:
         cap.release()
         return None
     return cap
+
+
+def camera_blocked(cap: cv2.VideoCapture, frames: int = 3) -> bool:
+    """Read a few frames and return True if they're all near-black (covered/shuttered)."""
+    means = []
+    for _ in range(frames):
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        means.append(float(np.mean(frame)))
+    if not means:
+        return True  # couldn't read at all
+    return max(means) < 5.0  # all frames near-black
 
 
 def load_baseline() -> Metrics:
@@ -234,6 +259,11 @@ def cmd_snap_baseline(args):
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Lid closed = no point trying to grab the webcam.
+    if lid_state() == "closed":
+        notify("posture-nudge", "Laptop lid is closed — open it and try again")
+        sys.exit(1)
+
     # Monitor service holds the camera for ~0.5s at a time; retry for a few seconds.
     start = time.time()
     cap: cv2.VideoCapture | None = None
@@ -243,6 +273,17 @@ def cmd_snap_baseline(args):
             time.sleep(0.3)
     if cap is None:
         notify("posture-nudge", "Camera busy — try again in a moment")
+        sys.exit(1)
+
+    # Camera opened but might be physically blocked (privacy shutter / camera-off
+    # function key / lens cover). Detect by checking if frames are all-black.
+    if camera_blocked(cap):
+        cap.release()
+        if lid_state() == "closed":
+            notify("posture-nudge", "Laptop lid closed — open it and try again")
+        else:
+            notify("posture-nudge",
+                   "Camera is closed (privacy shutter or Fn-key) — enable it and retry")
         sys.exit(1)
 
     pose = _new_pose()
