@@ -228,8 +228,9 @@ def cmd_calibrate(args):
 def cmd_snap_baseline(args):
     """Quick re-calibration: capture a few seconds of the current posture and save as baseline.
 
-    Intended to be triggered by a keyboard shortcut after the user has adjusted
-    their chair, screen tilt, or desk setup. Headless (notification-based feedback).
+    Triggered by a keyboard shortcut after chair/screen/desk changes. By default
+    pops up a small live preview so the user can see they're in frame and the
+    pose is being detected. Pass --no-gui for headless mode.
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -245,27 +246,59 @@ def cmd_snap_baseline(args):
         sys.exit(1)
 
     pose = _new_pose()
-    notify("posture-nudge", f"Hold your good posture — capturing {args.duration:.0f}s")
-    time.sleep(0.8)  # let user read the notification
+    th = load_thresholds() if THRESHOLDS_PATH.exists() else Thresholds()
+
+    # Warmup: read a few frames so MediaPipe's person detector has time to lock on
+    # before we start counting capture seconds.
+    for _ in range(8):
+        ok, frame = cap.read()
+        if ok:
+            pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
     samples: list[Metrics] = []
     end = time.time() + args.duration
+    aborted = False
+    win_title = "posture-nudge: snap baseline (ESC to cancel)"
+
     try:
         while time.time() < end:
             ok, frame = cap.read()
             if not ok:
                 continue
             result = pose.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            m = None
             if result.pose_landmarks:
                 m = compute_metrics(result.pose_landmarks.landmark)
                 if m is not None:
                     samples.append(m)
+
+            if not args.no_gui:
+                draw_overlay(frame, result.pose_landmarks, m, None, th)
+                remaining = max(0, end - time.time())
+                cv2.putText(frame, f"Hold your good posture  {remaining:.1f}s",
+                            (20, frame.shape[0] - 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+                cv2.putText(frame, f"samples: {len(samples)}",
+                            (20, frame.shape[0] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2)
+                cv2.imshow(win_title, frame)
+                cv2.setWindowProperty(win_title, cv2.WND_PROP_TOPMOST, 1)
+                if cv2.waitKey(1) & 0xFF == 27:
+                    aborted = True
+                    break
     finally:
         cap.release()
+        cv2.destroyAllWindows()
         pose.close()
 
-    if len(samples) < 10:
-        notify("posture-nudge", f"Snap failed — only {len(samples)} samples. Sit upright and retry.")
+    if aborted:
+        notify("posture-nudge", "Snap cancelled")
+        sys.exit(1)
+
+    if len(samples) < 5:
+        notify("posture-nudge",
+               f"Snap failed — only {len(samples)} valid samples. Make sure your "
+               f"shoulders + ears are in view and try again.")
         sys.exit(1)
 
     baseline = Metrics(
@@ -1047,7 +1080,9 @@ def main():
     psb = sub.add_parser("snap-baseline",
                          help="Quick re-calibrate the baseline (for chair/screen changes)")
     psb.add_argument("--camera", type=int, default=0)
-    psb.add_argument("--duration", type=float, default=3.0)
+    psb.add_argument("--duration", type=float, default=5.0)
+    psb.add_argument("--no-gui", action="store_true",
+                     help="Skip the live preview window (headless mode)")
     psb.set_defaults(func=cmd_snap_baseline)
 
     pk = sub.add_parser("install-shortcut",
