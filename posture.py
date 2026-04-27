@@ -1150,7 +1150,7 @@ def main():
                          help="Quick re-calibrate the baseline (for chair/screen changes)")
     psb.add_argument("--camera", type=int, default=0)
     psb.add_argument("--duration", type=float, default=5.0)
-    psb.add_argument("--test-seconds", type=float, default=5.0,
+    psb.add_argument("--test-seconds", type=float, default=10.0,
                      help="After saving, run a live test phase so you can verify "
                           "the new baseline by slouching/leaning. 0 to skip.")
     psb.add_argument("--no-gui", action="store_true",
