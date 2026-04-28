@@ -663,11 +663,22 @@ def cmd_analyze(args):
         print(f"\nDry run. Re-run with --write to save to {THRESHOLDS_PATH}.")
 
 
+POPUP_SCRIPT = Path(__file__).resolve().parent / "popup.py"
+
+
 def notify(title: str, body: str):
     subprocess.run(
         ["notify-send", "-a", "posture-nudge", "-u", "normal", title, body],
         check=False,
     )
+    # Also spawn the slide-up character popup. Non-blocking; the popup process
+    # exits on its own after the slide-out animation.
+    if POPUP_SCRIPT.exists():
+        subprocess.Popen(
+            [sys.executable, str(POPUP_SCRIPT), title, body],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
 
 def log_nudge(reasons: list[str], bad_for_seconds: float):
