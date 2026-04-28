@@ -18,8 +18,8 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib  # noqa: E402
 
 CHAIR_IMG = Path(__file__).resolve().parent / "chair.png"
 
-MARGIN_RIGHT = 32
-MARGIN_BOTTOM = 60
+MARGIN_RIGHT = 0
+MARGIN_BOTTOM = 0
 ANIM_STEP_PX = 14
 ANIM_TICK_MS = 14
 
