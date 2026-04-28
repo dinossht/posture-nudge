@@ -10,11 +10,14 @@ light — no mediapipe / opencv import, fires in <100ms.
 import argparse
 import sys
 import tkinter as tk
+from pathlib import Path
 
 BG = "#0a0a0a"
 FG = "#eceff4"
 ACCENT = "#bf616a"
 SUBTLE = "#8fbcbb"
+
+CHAIR_IMG = Path(__file__).resolve().parent / "chair.png"
 
 WIDTH = 320
 HEIGHT = 110
@@ -53,9 +56,14 @@ def main():
     body = tk.Frame(root, bg=BG, padx=14, pady=10)
     body.pack(side="left", fill="both", expand=True)
 
-    emoji_label = tk.Label(body, text=args.emoji, bg=BG, fg=FG,
-                           font=("Sans", 36))
-    emoji_label.pack(side="left", padx=(0, 14))
+    if CHAIR_IMG.exists():
+        chair_img = tk.PhotoImage(file=str(CHAIR_IMG))
+        char_label = tk.Label(body, image=chair_img, bg=BG, borderwidth=0)
+        char_label.image = chair_img  # keep reference so GC doesn't free it
+    else:
+        char_label = tk.Label(body, text=args.emoji, bg=BG, fg=FG,
+                              font=("Sans", 36))
+    char_label.pack(side="left", padx=(0, 14))
 
     text_frame = tk.Frame(body, bg=BG)
     text_frame.pack(side="left", anchor="center")
