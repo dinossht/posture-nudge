@@ -674,8 +674,9 @@ def notify(title: str, body: str):
     # Also spawn the slide-up character popup. Non-blocking; the popup process
     # exits on its own after the slide-out animation.
     if POPUP_SCRIPT.exists():
+        # Use system python: popup.py needs python3-gi (GTK), not in the venv.
         subprocess.Popen(
-            [sys.executable, str(POPUP_SCRIPT), title, body],
+            ["/usr/bin/python3", str(POPUP_SCRIPT), title, body],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
