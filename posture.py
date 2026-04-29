@@ -984,14 +984,18 @@ def cmd_plot(args):
     cmap = LinearSegmentedColormap.from_list("posture", [GREEN, YELLOW, RED])
     cmap.set_bad(MUTED)
 
-    # Heatmap
-    im = ax1.imshow(np.ma.masked_invalid(matrix), aspect="auto", cmap=cmap,
+    # Heatmap — only show working hours 7..18 (off-hours have no data anyway)
+    WORK_HOUR_START, WORK_HOUR_END = 7, 18
+    work_matrix = matrix[:, WORK_HOUR_START:WORK_HOUR_END + 1]
+    im = ax1.imshow(np.ma.masked_invalid(work_matrix), aspect="auto", cmap=cmap,
                     vmin=0, vmax=1, interpolation="nearest")
     ax1.set_facecolor(MUTED)
     ax1.set_title("Bad-posture % by hour (last 7d)",
                   color=FG, fontsize=10, loc="left", pad=6)
-    ax1.set_xticks(range(0, 24, 4))
-    ax1.set_xticklabels([f"{h:02d}" for h in range(0, 24, 4)],
+    work_hours = list(range(WORK_HOUR_START, WORK_HOUR_END + 1))
+    tick_idx = list(range(0, len(work_hours), 2))
+    ax1.set_xticks(tick_idx)
+    ax1.set_xticklabels([f"{work_hours[i]:02d}" for i in tick_idx],
                         color=FG, fontsize=8)
     ax1.set_yticks(range(days_back))
     ax1.set_yticklabels([d.strftime("%a") for d in day_list],
@@ -1040,7 +1044,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart={python} {script} monitor --interval 600 --required-checks 1 --cooldown 1800 --quiet-start 22 --quiet-end 7
+ExecStart={python} {script} monitor --interval 600 --required-checks 1 --cooldown 1800 --quiet-start 18 --quiet-end 7
 Restart=on-failure
 RestartSec=15
 # Environment needed for notify-send + webcam access
