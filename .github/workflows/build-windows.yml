@@ -8,6 +8,9 @@ on:
       - ".github/workflows/build-windows.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write   # needed by the release step
+
 jobs:
   build:
     runs-on: windows-latest
@@ -39,3 +42,16 @@ jobs:
           name: PostureNudge-windows
           path: windows/dist/PostureNudge.exe
           retention-days: 30
+
+      - name: Publish/refresh "latest" release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          body: |
+            Latest auto-built Windows .exe from commit ${{ github.sha }}.
+            Download `PostureNudge.exe` below and double-click to run.
+          files: windows/dist/PostureNudge.exe
+          prerelease: true
+          make_latest: true
