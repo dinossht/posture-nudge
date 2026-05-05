@@ -500,17 +500,33 @@ class CalibrationDialog(tk.Toplevel):
         self.saved_th = load_thresholds()
         self.slack_var = tk.IntVar(value=self.saved_th.slack)
 
+        # Top: phase banner (big, color-coded)
+        self.banner_var = tk.StringVar(value="CALIBRATING — hold your good posture")
+        self.banner = tk.Label(self, textvariable=self.banner_var, bg=BG,
+                               fg=YELLOW, font=("Segoe UI", 16, "bold"))
+        self.banner.pack(pady=(8, 4))
+
         self.video_label = tk.Label(self, bg=BG)
-        self.video_label.pack(fill="both", expand=True, padx=8, pady=8)
+        self.video_label.pack(fill="both", expand=True, padx=8, pady=4)
+
+        # Slack slider row (only used in test phase but visible from the start)
         bar = tk.Frame(self, bg=BG)
         bar.pack(fill="x", padx=8, pady=4)
-        tk.Label(bar, text="slack", bg=BG, fg=FG).pack(side="left")
+        tk.Label(bar, text="slack:", bg=BG, fg=FG,
+                 font=("Segoe UI", 10)).pack(side="left")
+        self.slack_label_var = tk.StringVar(value=f"{self.saved_th.slack}/100")
+        tk.Label(bar, textvariable=self.slack_label_var, bg=BG, fg=FG,
+                 width=8).pack(side="left", padx=(4, 8))
         ttk.Scale(bar, from_=0, to=100, orient="horizontal",
-                  variable=self.slack_var).pack(side="left", fill="x",
-                                                expand=True, padx=8)
-        self.status_var = tk.StringVar(value="Hold your good posture (5s)")
-        tk.Label(self, textvariable=self.status_var, bg=BG, fg=FG,
-                 font=("Segoe UI", 11)).pack(pady=4)
+                  variable=self.slack_var,
+                  command=lambda v: self.slack_label_var.set(
+                      f"{int(float(v))}/100")
+                  ).pack(side="left", fill="x", expand=True, padx=8)
+
+        # Bottom: status line (countdown / samples / details)
+        self.status_var = tk.StringVar(value="Camera starting…")
+        tk.Label(self, textvariable=self.status_var, bg=BG, fg=MUTED,
+                 font=("Segoe UI", 10)).pack(pady=(0, 8))
 
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.after(50, self.tick)
@@ -528,7 +544,9 @@ class CalibrationDialog(tk.Toplevel):
 
     def tick(self):
         if not self._open_camera():
-            self.status_var.set("Camera busy — close other apps and reopen")
+            self.banner_var.set("WAITING FOR CAMERA")
+            self.banner.configure(fg=YELLOW)
+            self.status_var.set("Camera busy — close other webcam apps. Retrying…")
             self.after(500, self.tick)
             return
 
@@ -545,9 +563,13 @@ class CalibrationDialog(tk.Toplevel):
         if self.phase == "capture":
             if m is not None:
                 self.samples.append(m)
+            face_seen = m is not None
+            self.banner_var.set(
+                f"CALIBRATING — hold your good posture  ({remaining:.1f}s)")
+            self.banner.configure(fg=YELLOW if face_seen else RED)
             self.status_var.set(
-                f"Hold your good posture — {remaining:.1f}s   "
-                f"(samples: {len(self.samples)})")
+                f"samples captured: {len(self.samples)}    "
+                f"face: {'detected ✓' if face_seen else 'NOT detected — sit in view'}")
             if remaining <= 0:
                 self._finish_capture()
         elif self.phase == "test":
@@ -559,13 +581,21 @@ class CalibrationDialog(tk.Toplevel):
                 slack=slack,
             )
             mult = 1 + slack * 0.19
-            label = "—"
             if m is not None and self.baseline is not None:
                 bad, reasons = is_bad(m, self.baseline, self.live_th)
-                label = ("BAD: " + "; ".join(reasons)) if bad else "OK"
+                if bad:
+                    self.banner_var.set(f"BAD POSTURE — {'; '.join(reasons[:2])}")
+                    self.banner.configure(fg=RED)
+                else:
+                    self.banner_var.set("GOOD POSTURE ✓")
+                    self.banner.configure(fg=GREEN)
+            else:
+                self.banner_var.set("FACE NOT DETECTED — sit in view")
+                self.banner.configure(fg=YELLOW)
             self.status_var.set(
-                f"Test — try slouching/leaning  ({remaining:.1f}s)   "
-                f"slack {slack}/100 ({mult:.1f}×)   {label}")
+                f"test — try slouching / leaning  ({remaining:.1f}s)    "
+                f"slack {slack}/100 = {mult:.1f}× more lenient    "
+                f"(slider auto-saves on close)")
             if remaining <= 0:
                 self._finish_test()
                 return
@@ -592,7 +622,10 @@ class CalibrationDialog(tk.Toplevel):
 
     def _finish_capture(self):
         if len(self.samples) < 5:
-            self.status_var.set("Not enough samples — restarting capture")
+            self.banner_var.set("NOT ENOUGH SAMPLES — sit in view")
+            self.banner.configure(fg=RED)
+            self.status_var.set(
+                f"only {len(self.samples)} valid samples — retrying capture")
             self.samples = []
             self.phase_end = time.time() + self.CAPTURE_S
             return
@@ -603,6 +636,12 @@ class CalibrationDialog(tk.Toplevel):
             confidence=float(np.mean([s.confidence for s in self.samples])),
         )
         save_baseline(self.baseline)
+        # Brief celebratory banner before transitioning to test phase
+        self.banner_var.set(
+            f"BASELINE SAVED ({len(self.samples)} samples, "
+            f"conf {self.baseline.confidence:.0%})")
+        self.banner.configure(fg=GREEN)
+        self.status_var.set("now slouch / lean to verify it responds…")
         self.phase = "test"
         self.phase_end = time.time() + self.TEST_S
 
