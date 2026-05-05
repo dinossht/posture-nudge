@@ -473,7 +473,13 @@ class CalibrationDialog(tk.Toplevel):
         self.after(50, self.tick)
 
     def _open_camera(self) -> bool:
-        if self.cap is None:
+        # Re-create on failure: a VideoCapture that failed to open stays
+        # closed forever otherwise, so we'd retry-loop with no chance of
+        # success. Re-create each retry until something else releases the
+        # camera (e.g. a competing periodic-check process finishes).
+        if self.cap is None or not self.cap.isOpened():
+            if self.cap is not None:
+                self.cap.release()
             self.cap = cv2.VideoCapture(self.settings.camera)
         return self.cap.isOpened()
 
