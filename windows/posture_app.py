@@ -261,9 +261,10 @@ def set_windows_autostart(enabled: bool, exe_path: Path | None = None) -> str:
 class CharacterPopup:
     """Slide-up chair popup shown by the main app's Tk root."""
 
-    WIDTH, HEIGHT = 320, 110
+    WIDTH, HEIGHT = 320, 130
     HOLD_MS = 4500
     STEP_PX, TICK_MS = 14, 14
+    CHAIR_TARGET_PX = 96  # height to display the chair at
 
     def __init__(self, root: tk.Tk, title: str, body: str):
         self.root = root
@@ -275,6 +276,10 @@ class CharacterPopup:
         except tk.TclError:
             pass
         self.win.configure(bg=BG)
+        # Force size — overrideredirect would otherwise let Tk resize to content.
+        self.win.resizable(False, False)
+        self.win.minsize(self.WIDTH, self.HEIGHT)
+        self.win.maxsize(self.WIDTH, self.HEIGHT)
 
         sw = root.winfo_screenwidth()
         sh = root.winfo_screenheight()
@@ -282,24 +287,31 @@ class CharacterPopup:
         self.target_y = sh - self.HEIGHT
         self.start_y = sh + 5
         self.cur_y = self.start_y
-        self.win.geometry(f"{self.WIDTH}x{self.HEIGHT}+{self.target_x}+{self.start_y}")
 
         accent = tk.Frame(self.win, bg=ACCENT, width=4)
         accent.pack(side="left", fill="y")
         body_frame = tk.Frame(self.win, bg=BG, padx=14, pady=10)
         body_frame.pack(side="left", fill="both", expand=True)
 
+        chair_added = False
         if CHAIR_PNG.exists():
             try:
-                self.chair = tk.PhotoImage(file=str(CHAIR_PNG))
+                from PIL import Image, ImageTk
+                im = Image.open(str(CHAIR_PNG))
+                ratio = self.CHAIR_TARGET_PX / im.height
+                im = im.resize(
+                    (int(im.width * ratio), self.CHAIR_TARGET_PX),
+                    Image.LANCZOS,
+                )
+                self.chair = ImageTk.PhotoImage(im)
                 tk.Label(body_frame, image=self.chair, bg=BG, borderwidth=0
-                         ).pack(side="left", padx=(0, 14))
-            except tk.TclError:
-                tk.Label(body_frame, text="🪑", bg=BG, fg=FG, font=("Segoe UI", 32)
-                         ).pack(side="left", padx=(0, 14))
-        else:
-            tk.Label(body_frame, text="🪑", bg=BG, fg=FG, font=("Segoe UI", 32)
-                     ).pack(side="left", padx=(0, 14))
+                         ).pack(side="left", padx=(0, 12))
+                chair_added = True
+            except Exception:
+                pass
+        if not chair_added:
+            tk.Label(body_frame, text="🪑", bg=BG, fg=FG,
+                     font=("Segoe UI", 36)).pack(side="left", padx=(0, 12))
 
         text_frame = tk.Frame(body_frame, bg=BG)
         text_frame.pack(side="left", anchor="center")
@@ -307,10 +319,15 @@ class CharacterPopup:
                  font=("Segoe UI", 14, "bold"), anchor="w", justify="left"
                  ).pack(anchor="w")
         tk.Label(text_frame, text=body, bg=BG, fg=BLUE,
-                 font=("Segoe UI", 11), anchor="w", justify="left",
-                 wraplength=self.WIDTH - 110
+                 font=("Segoe UI", 10), anchor="w", justify="left",
+                 wraplength=self.WIDTH - 130
                  ).pack(anchor="w")
 
+        # Set geometry AFTER packing so widgets don't shrink-wrap the window
+        # below our requested size.
+        self.win.update_idletasks()
+        self.win.geometry(
+            f"{self.WIDTH}x{self.HEIGHT}+{self.target_x}+{self.start_y}")
         self.win.after(self.TICK_MS, self._slide_in)
 
     def _slide_in(self):
