@@ -258,6 +258,33 @@ def set_windows_autostart(enabled: bool, exe_path: Path | None = None) -> str:
 
 # ---- popup (in-process Tkinter Toplevel) ---------------------------------
 
+def _primary_screen_geom(root: tk.Tk) -> tuple[int, int, int, int]:
+    """Return (x, y, width, height) of the primary monitor.
+
+    On Windows the Tk winfo_screen* values match the primary monitor. On Linux
+    with multiple displays they can return the bounding box of all monitors,
+    which puts overlay windows at the wrong position. Fall back to xrandr in
+    that case.
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["xrandr", "--query"], text=True, timeout=1.0,
+                stderr=subprocess.DEVNULL,
+            )
+            import re
+            for line in out.split("\n"):
+                if " connected primary " in line:
+                    m = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
+                    if m:
+                        w, h, x, y = (int(m.group(i)) for i in (1, 2, 3, 4))
+                        return x, y, w, h
+        except Exception:
+            pass
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+
 class CharacterPopup:
     """Slide-up chair popup shown by the main app's Tk root."""
 
@@ -281,11 +308,10 @@ class CharacterPopup:
         self.win.minsize(self.WIDTH, self.HEIGHT)
         self.win.maxsize(self.WIDTH, self.HEIGHT)
 
-        sw = root.winfo_screenwidth()
-        sh = root.winfo_screenheight()
-        self.target_x = sw - self.WIDTH
-        self.target_y = sh - self.HEIGHT
-        self.start_y = sh + 5
+        sx, sy, sw, sh = _primary_screen_geom(root)
+        self.target_x = sx + sw - self.WIDTH
+        self.target_y = sy + sh - self.HEIGHT
+        self.start_y = sy + sh + 5
         self.cur_y = self.start_y
 
         accent = tk.Frame(self.win, bg=ACCENT, width=4)
