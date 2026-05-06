@@ -500,33 +500,38 @@ class CalibrationDialog(tk.Toplevel):
         self.saved_th = load_thresholds()
         self.slack_var = tk.IntVar(value=self.saved_th.slack)
 
+        # Make the dialog tall enough so the slider isn't pushed off-screen
+        # when the webcam frame is shown.
+        self.geometry("720x720")
+
         # Top: phase banner (big, color-coded)
         self.banner_var = tk.StringVar(value="CALIBRATING — hold your good posture")
         self.banner = tk.Label(self, textvariable=self.banner_var, bg=BG,
                                fg=YELLOW, font=("Segoe UI", 16, "bold"))
-        self.banner.pack(pady=(8, 4))
+        self.banner.pack(side="top", pady=(8, 4))
 
-        self.video_label = tk.Label(self, bg=BG)
-        self.video_label.pack(fill="both", expand=True, padx=8, pady=4)
+        # Pack the slider + status FIRST with side="bottom" so they always sit
+        # at the bottom of the dialog regardless of how tall the video frame is.
+        self.status_var = tk.StringVar(value="Camera starting…")
+        tk.Label(self, textvariable=self.status_var, bg=BG, fg=MUTED,
+                 font=("Segoe UI", 10)).pack(side="bottom", pady=(0, 8))
 
-        # Slack slider row (only used in test phase but visible from the start)
         bar = tk.Frame(self, bg=BG)
-        bar.pack(fill="x", padx=8, pady=4)
+        bar.pack(side="bottom", fill="x", padx=8, pady=4)
         tk.Label(bar, text="slack:", bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).pack(side="left")
+                 font=("Segoe UI", 11, "bold")).pack(side="left")
         self.slack_label_var = tk.StringVar(value=f"{self.saved_th.slack}/100")
         tk.Label(bar, textvariable=self.slack_label_var, bg=BG, fg=FG,
-                 width=8).pack(side="left", padx=(4, 8))
+                 width=8, font=("Segoe UI", 11)).pack(side="left", padx=(4, 8))
         ttk.Scale(bar, from_=0, to=100, orient="horizontal",
                   variable=self.slack_var,
                   command=lambda v: self.slack_label_var.set(
                       f"{int(float(v))}/100")
                   ).pack(side="left", fill="x", expand=True, padx=8)
 
-        # Bottom: status line (countdown / samples / details)
-        self.status_var = tk.StringVar(value="Camera starting…")
-        tk.Label(self, textvariable=self.status_var, bg=BG, fg=MUTED,
-                 font=("Segoe UI", 10)).pack(pady=(0, 8))
+        # Video fills the remaining space.
+        self.video_label = tk.Label(self, bg=BG)
+        self.video_label.pack(side="top", fill="both", expand=True, padx=8, pady=4)
 
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.after(50, self.tick)
