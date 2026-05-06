@@ -859,6 +859,23 @@ class App(tk.Tk):
         add_row("Camera index (0/1/…)", self.s_camera)
         add_row("Start with Windows", self.s_autostart, kind="check")
 
+        # Slack slider (more prominent than the one inside Calibrate dialog).
+        cur_th = load_thresholds()
+        self.s_slack = tk.IntVar(value=cur_th.slack)
+        slack_row = tk.Frame(f, bg=BG)
+        slack_row.pack(fill="x", pady=(16, 4))
+        tk.Label(slack_row, text="Slack (0=strict, 100=very lenient)",
+                 bg=BG, fg=FG, anchor="w", width=32
+                 ).pack(side="left")
+        self.s_slack_label = tk.StringVar(value=f"{cur_th.slack}/100")
+        tk.Label(slack_row, textvariable=self.s_slack_label, bg=BG, fg=FG,
+                 width=10).pack(side="left")
+        ttk.Scale(slack_row, from_=0, to=100, orient="horizontal",
+                  variable=self.s_slack,
+                  command=lambda v: self.s_slack_label.set(
+                      f"{int(float(v))}/100")
+                  ).pack(side="left", fill="x", expand=True, padx=8)
+
         self.autostart_status = tk.StringVar(value="")
         tk.Label(f, textvariable=self.autostart_status, bg=BG, fg=MUTED
                  ).pack(anchor="w", pady=(8, 0))
@@ -909,6 +926,10 @@ class App(tk.Tk):
         self.settings.camera = max(0, int(self.s_camera.get()))
         self.settings.autostart = bool(self.s_autostart.get())
         save_settings(self.settings)
+        # Persist the slack slider too.
+        th = load_thresholds()
+        th.slack = max(0, min(100, int(self.s_slack.get())))
+        save_thresholds(th)
         # Apply autostart
         if IS_WINDOWS:
             exe = Path(sys.executable) if IS_FROZEN else None
