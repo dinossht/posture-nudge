@@ -5,11 +5,14 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 block_cipher = None
 
 mp_data = collect_data_files("mediapipe")
-hidden = collect_submodules("mediapipe.python") + [
-    "PIL.Image", "PIL.ImageTk",
-]
+mpl_data = collect_data_files("matplotlib")
+hidden = (
+    collect_submodules("mediapipe.python")
+    + collect_submodules("matplotlib")
+    + ["PIL.Image", "PIL.ImageTk", "matplotlib.backends.backend_tkagg"]
+)
 
-datas = mp_data + [
+datas = mp_data + mpl_data + [
     ("chair.png", "."),
 ]
 
@@ -22,7 +25,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter.test", "test", "unittest"],
+    # No excludes — earlier 'unittest' exclude broke matplotlib at runtime
+    # (matplotlib/__init__.py line 159 imports it).
+    excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
