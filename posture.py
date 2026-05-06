@@ -1047,9 +1047,9 @@ Type=simple
 ExecStart={python} {script} monitor --interval 600 --required-checks 1 --cooldown 1800 --quiet-start 18 --quiet-end 7
 Restart=on-failure
 RestartSec=15
-# Environment needed for notify-send + webcam access
-Environment=DISPLAY=:0
-Environment=XDG_RUNTIME_DIR=%t
+# DISPLAY/XAUTHORITY/DBUS are inherited from the user-systemd manager
+# (set by GDM at login). Hardcoding DISPLAY=:0 broke the GTK popup on
+# sessions where the actual display is :1.
 
 [Install]
 WantedBy=graphical-session.target
@@ -1081,8 +1081,6 @@ Description=Posture nudge — weekly stats digest
 [Service]
 Type=oneshot
 ExecStart={python} {script} digest --days 7
-Environment=DISPLAY=:0
-Environment=XDG_RUNTIME_DIR=%t
 """
 
 DIGEST_TIMER = """[Unit]
