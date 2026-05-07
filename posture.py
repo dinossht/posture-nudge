@@ -718,6 +718,23 @@ def log_check(status: str, metrics: Metrics | None = None):
         f.write(json.dumps(entry) + "\n")
 
 
+def screen_locked() -> bool:
+    """True if the GNOME screen-saver reports an active lock. False if we
+    can't tell or the desktop isn't GNOME — caller treats False as 'maybe
+    in use, do the check'."""
+    try:
+        out = subprocess.check_output(
+            ["gdbus", "call", "--session",
+             "--dest", "org.gnome.ScreenSaver",
+             "--object-path", "/org/gnome/ScreenSaver",
+             "--method", "org.gnome.ScreenSaver.GetActive"],
+            text=True, stderr=subprocess.DEVNULL, timeout=2.0,
+        )
+        return "true" in out.lower()
+    except Exception:
+        return False
+
+
 def in_quiet_hours(now: datetime, start: int, end: int) -> bool:
     """True if `now.hour` is inside the quiet window. Handles wrap past midnight."""
     h = now.hour
@@ -793,6 +810,14 @@ def cmd_monitor(args):
             stamp = now_dt.strftime("%H:%M:%S")
             if in_quiet_hours(now_dt, args.quiet_start, args.quiet_end):
                 log_check("quiet")
+                time.sleep(args.interval)
+                continue
+            if screen_locked():
+                # Don't spin up the camera or run inference while the user is
+                # away from the desk; logged 'locked' so the heatmap shows it
+                # as no-data instead of fake good/bad.
+                print(f"[{stamp}] screen locked — skipping check")
+                log_check("locked")
                 time.sleep(args.interval)
                 continue
             # Hot-reload baseline if snap-baseline updated the file.
