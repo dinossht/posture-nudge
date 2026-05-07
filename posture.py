@@ -103,10 +103,21 @@ def compute_metrics(lm) -> Metrics | None:
 
     shoulder_mid_y = (ls.y + rs.y) / 2
     ear_mid_y = (le.y + re.y) / 2
+    shoulder_tilt = abs(ls.y - rs.y) / shoulder_width
+
+    # Physical-plausibility filter. MediaPipe occasionally reports high-
+    # confidence landmarks on dark/empty frames (e.g. lid closed, screen
+    # locked, camera covered) that are anatomically impossible. A real
+    # seated user is at shoulder_width 0.20..0.80 and shoulder_tilt < 0.4.
+    if not (0.20 < shoulder_width < 0.80):
+        return None
+    if shoulder_tilt > 0.4:
+        return None
+
     return Metrics(
         ear_drop=(ear_mid_y - shoulder_mid_y) / shoulder_width,
         shoulder_width=shoulder_width,
-        shoulder_tilt=abs(ls.y - rs.y) / shoulder_width,
+        shoulder_tilt=shoulder_tilt,
         confidence=float(confidence),
     )
 

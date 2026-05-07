@@ -119,10 +119,17 @@ def compute_metrics(lm) -> Metrics | None:
     sw = float(np.hypot(ls.x - rs.x, ls.y - rs.y))
     if sw < 1e-6:
         return None
+    tilt = abs(ls.y - rs.y) / sw
+    # Physical-plausibility filter: reject anatomically impossible metrics
+    # caused by MediaPipe hallucinating landmarks on dark / empty / locked-
+    # screen frames. A real seated user has shoulder_width 0.20..0.80 and
+    # shoulder_tilt < 0.4 (shoulders are roughly horizontal).
+    if not (0.20 < sw < 0.80) or tilt > 0.4:
+        return None
     return Metrics(
         ear_drop=((le.y + re.y) / 2 - (ls.y + rs.y) / 2) / sw,
         shoulder_width=sw,
-        shoulder_tilt=abs(ls.y - rs.y) / sw,
+        shoulder_tilt=tilt,
         confidence=float(confidence),
     )
 
