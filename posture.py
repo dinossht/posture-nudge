@@ -736,7 +736,12 @@ def screen_locked() -> bool:
 
 
 def in_quiet_hours(now: datetime, start: int, end: int) -> bool:
-    """True if `now.hour` is inside the quiet window. Handles wrap past midnight."""
+    """True if `now` is outside the active monitoring window. Weekdays only
+    (Mon-Fri); Sat/Sun are always quiet. Inside the work week, quiet outside
+    the `start`..`end` hour range. Handles wrap past midnight (start > end)."""
+    # Sat=5, Sun=6 -> always quiet
+    if now.weekday() >= 5:
+        return True
     h = now.hour
     if start == end:
         return False
@@ -1021,7 +1026,7 @@ def cmd_plot(args):
     cmap.set_bad(MUTED)
 
     # Heatmap — only show working hours 7..18 (off-hours have no data anyway)
-    WORK_HOUR_START, WORK_HOUR_END = 7, 18
+    WORK_HOUR_START, WORK_HOUR_END = 7, 17
     work_matrix = matrix[:, WORK_HOUR_START:WORK_HOUR_END + 1]
     im = ax1.imshow(np.ma.masked_invalid(work_matrix), aspect="auto", cmap=cmap,
                     vmin=0, vmax=1, interpolation="nearest")
@@ -1080,7 +1085,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart={python} {script} monitor --interval 600 --required-checks 1 --cooldown 1800 --quiet-start 18 --quiet-end 7
+ExecStart={python} {script} monitor --interval 600 --required-checks 1 --cooldown 1800 --quiet-start 17 --quiet-end 7
 Restart=on-failure
 RestartSec=15
 # DISPLAY/XAUTHORITY/DBUS are inherited from the user-systemd manager

@@ -101,7 +101,7 @@ class Thresholds:
 class Settings:
     interval_s: int = 600
     cooldown_s: int = 1800
-    quiet_start: int = 18
+    quiet_start: int = 17
     quiet_end: int = 7
     autostart: bool = False
     camera: int = 0
@@ -157,6 +157,10 @@ def is_bad(m: Metrics, base: Metrics, th: Thresholds) -> tuple[bool, list[str]]:
 
 
 def in_quiet(now: datetime, qs: int, qe: int) -> bool:
+    """Outside the active monitoring window. Mon-Fri only; Sat/Sun always
+    quiet. Within the work week, quiet outside `qs`..`qe` hours."""
+    if now.weekday() >= 5:
+        return True
     h = now.hour
     if qs == qe:
         return False
@@ -707,7 +711,7 @@ class StatsView(tk.Frame):
                     continue
                 counts[days.index(ts.date())][ts.hour][s] += 1
 
-        WORK_FROM, WORK_TO = 7, 18
+        WORK_FROM, WORK_TO = 7, 17
         matrix = np.full((days_back, WORK_TO - WORK_FROM + 1), np.nan)
         for di in range(days_back):
             for hi in range(WORK_FROM, WORK_TO + 1):
